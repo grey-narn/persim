@@ -92,7 +92,7 @@ class PersImage(TransformerMixin):
             diagrams = [diagrams]
 
         dgs = [np.copy(diagram) for diagram in diagrams]
-        landscapes = [PersImage.to_landscape(dg) for dg in dgs]
+        landscapes = [self.to_landscape(dg) for dg in dgs]
 
         if not self.specs:
             self.specs = {
@@ -114,29 +114,48 @@ class PersImage(TransformerMixin):
         maxBD = self.specs["maxBD"]
         minBD = min(self.specs["minBD"], 0)  # at least show 0, maybe lower
 
-        # Same bins in x and y axis
-        dx = maxBD / (self.ny)
-        xs_lower = np.linspace(minBD, maxBD, self.nx)
-        xs_upper = np.linspace(minBD, maxBD, self.nx) + dx
-
-        ys_lower = np.linspace(0, maxBD, self.ny)
-        ys_upper = np.linspace(0, maxBD, self.ny) + dx
-
-        weighting = self.weighting(landscape)
+        dx = maxBD / (self.nx)
+        dy = maxBD / (self.ny)
 
         # Define zeros
         img = np.zeros((self.nx, self.ny))
 
+        weighting = self.weighting(landscape)
         # Implement this as a `summed-area table` - it'll be way faster
         spread = self.spread if self.spread else dx
-        for point in landscape:
-            x_smooth = norm.cdf(xs_upper, point[0], spread) - norm.cdf(
-                xs_lower, point[0], spread
-            )
-            y_smooth = norm.cdf(ys_upper, point[1], spread) - norm.cdf(
-                ys_lower, point[1], spread
-            )
-            img += np.outer(x_smooth, y_smooth) * weighting(point)
+        if self.weighting_type == "linear":
+
+            xs_lower = np.linspace(minBD, maxBD, self.nx)
+            xs_upper = np.linspace(minBD, maxBD, self.nx) + dx
+
+            ys_lower = np.linspace(0, maxBD, self.ny)
+            ys_upper = np.linspace(0, maxBD, self.ny) + dx
+
+            for point in landscape:
+                x_smooth = norm.cdf(xs_upper, point[0], spread) - norm.cdf(
+                    xs_lower, point[0], spread
+                )
+                y_smooth = norm.cdf(ys_upper, point[1], spread) - norm.cdf(
+                    ys_lower, point[1], spread
+                )
+                img += np.outer(x_smooth, y_smooth) * weighting(point)
+        else:
+            assert self.weighting_type in ["dirac_none", "dirac_linear"]
+
+            xs = np.linspace(minBD, maxBD, self.nx) + (dx / 2)
+            ys = np.linspace(0, maxBD, self.ny) + (dy / 2)
+
+            for i, x in enumerate(xs):
+                for j, y in enumerate(ys):
+                    if self.weighting_type == "dirac_none":
+                        weighting = np.ones(landscape.shape[1])
+                    else:
+                        weighting = (1 / np.max(landscape[1])) * landscape[1]
+                    # vector of squared distances from pixel center (x, y) to landscape points
+                    dsq = np.sum((landscape - np.array([[x, y]])) ** 2, axis=1)
+                    assert(dsq.shape == (landscape.shape[0],) and dsq.shape == weighting.shape)
+                    img[i, j] = np.sum(weighting * np.exp(-dsq / (2.0 * spread * spread))) / (2.0  * np.pi * spread)
+
         img = img.T[::-1]
         return img
 
@@ -188,12 +207,12 @@ class PersImage(TransformerMixin):
 
         return gaussian
 
-    @staticmethod
-    def to_landscape(diagram):
+    # @staticmethod
+    def to_landscape(self, diagram):
         """ Convert a diagram to a landscape
-            (b,d) -> (b, d-b)
+            (b,d) -> (d-b/sqrt(2), (d+b)/sqrt(2))
         """
-        diagram[:, 1] -= diagram[:, 0]
+        diagram[:, 0], diagram[:, 1] = (diagram[:, 1] - diagram[:, 0]) / np.sqrt(2), (diagram[:, 1] + diagram[:, 0]) / np.sqrt(2)
 
         return diagram
 
